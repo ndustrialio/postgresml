@@ -24,13 +24,13 @@ static PY_MODULE: Lazy<Py<PyModule>> = Lazy::new(|| {
 pub fn transform(
     task: &serde_json::Value,
     args: &serde_json::Value,
-    inputs: &Vec<String>,
+    inputs: Vec<&str>,
 ) -> serde_json::Value {
     crate::bindings::venv::activate();
 
     let task = serde_json::to_string(task).unwrap();
     let args = serde_json::to_string(args).unwrap();
-    let inputs = serde_json::to_string(inputs).unwrap();
+    let inputs = serde_json::to_string(&inputs).unwrap();
 
     let results = Python::with_gil(|py| -> String {
         let transform: Py<PyAny> = PY_MODULE.getattr(py, "transform").unwrap().into();
@@ -56,28 +56,33 @@ pub fn transform(
     serde_json::from_str(&results).unwrap()
 }
 
-pub fn embed(transformer: &str, inputs: &[&str], kwargs: &serde_json::Value) -> Vec<Vec<f32>> {
+pub fn embed(transformer: &str, inputs: Vec<&str>, kwargs: &serde_json::Value) -> Vec<Vec<f32>> {
     crate::bindings::venv::activate();
 
     let kwargs = serde_json::to_string(kwargs).unwrap();
-    let inputs = serde_json::to_string(&inputs).unwrap();
     Python::with_gil(|py| -> Vec<Vec<f32>> {
         let embed: Py<PyAny> = PY_MODULE.getattr(py, "embed").unwrap().into();
-        embed
-            .call1(
+        let result = embed.call1(
+            py,
+            PyTuple::new(
                 py,
-                PyTuple::new(
-                    py,
-                    &[
-                        transformer.to_string().into_py(py),
-                        inputs.into_py(py),
-                        kwargs.into_py(py),
-                    ],
-                ),
-            )
-            .unwrap()
-            .extract(py)
-            .unwrap()
+                &[
+                    transformer.to_string().into_py(py),
+                    inputs.into_py(py),
+                    kwargs.into_py(py),
+                ],
+            ),
+        );
+
+        let result = match result {
+            Err(e) => {
+                let traceback = e.traceback(py).unwrap().format().unwrap();
+                error!("{traceback} {e}")
+            }
+            Ok(o) => o.extract(py).unwrap(),
+        };
+
+        result
     })
 }
 
@@ -311,4 +316,15 @@ pub fn load_dataset(
     }
 
     num_rows
+}
+
+pub fn clear_gpu_cache(memory_usage: Option<f32>) -> bool {
+    Python::with_gil(|py| -> bool {
+        let clear_gpu_cache: Py<PyAny> = PY_MODULE.getattr(py, "clear_gpu_cache").unwrap().into();
+        clear_gpu_cache
+            .call1(py, PyTuple::new(py, &[memory_usage.into_py(py)]))
+            .unwrap()
+            .extract(py)
+            .unwrap()
+    })
 }

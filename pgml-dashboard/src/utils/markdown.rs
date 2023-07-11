@@ -269,7 +269,7 @@ impl SyntaxHighlighterAdapter for SyntaxHighlighter {
                             "pgml.sum",
                             "pgml.norm_l2",
                             "CONCURRENTLY",
-                            "ON",
+                            "ON\n",
                         ];
                         static ref SQL_KEYS_REPLACEMENTS: [&'static str; 57] = [
                             "<span class=\"syntax-highlight\">CASCADE</span>",
@@ -328,7 +328,7 @@ impl SyntaxHighlighterAdapter for SyntaxHighlighter {
                             "<strong>pgml.sum</strong>",
                             "<strong>pgml.norm_l2</strong>",
                             "<span class=\"syntax-highlight\">CONCURRENTLY</span>",
-                            "<span class=\"syntax-highlight\">ON</span>",
+                            "<span class=\"syntax-highlight\">ON</span>\n",
                         ];
                         static ref AHO_SQL: AhoCorasick = AhoCorasickBuilder::new()
                             .match_kind(MatchKind::LeftmostLongest)
@@ -497,6 +497,29 @@ pub fn get_title<'a>(root: &'a AstNode<'a>) -> anyhow::Result<String> {
     })?;
 
     Ok(title)
+}
+
+/// Wrap tables in container to allow for x-scroll on overflow.
+pub fn wrap_tables<'a>(root: &'a AstNode<'a>, arena: &'a Arena<AstNode<'a>>) -> anyhow::Result<()> {
+    let _ = iter_nodes(root, &mut |node| {
+        match &node.data.borrow().value {
+            &NodeValue::Table(ref _table) => {
+                let open_tag = arena.alloc(Node::new(RefCell::new(Ast::new(
+                    NodeValue::HtmlInline(r#"<div class="overflow-auto w-100">"#.to_string()),
+                ))));
+                let close_tag = arena.alloc(Node::new(RefCell::new(Ast::new(
+                    NodeValue::HtmlInline("</div>".to_string()),
+                ))));
+                node.insert_before(open_tag);
+                node.insert_after(close_tag);
+            }
+            _ => (),
+        };
+
+        Ok(true)
+    })?;
+
+    Ok(())
 }
 
 /// Generate the table of contents for the article.
@@ -1043,8 +1066,8 @@ impl SearchIndex {
 
     pub fn documents() -> Vec<PathBuf> {
         let guides =
-            glob::glob(&(config::static_dir() + "/docs/guides/**/*.md")).expect("glob failed");
-        let blogs = glob::glob(&(config::static_dir() + "/blog/**/*.md")).expect("glob failed");
+            glob::glob(&(config::content_dir() + "/docs/guides/**/*.md")).expect("glob failed");
+        let blogs = glob::glob(&(config::content_dir() + "/blog/**/*.md")).expect("glob failed");
         guides
             .chain(blogs)
             .map(|path| path.expect("glob path failed"))

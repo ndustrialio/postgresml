@@ -25,7 +25,7 @@ async fn search(query: &str, index: &State<markdown::SearchIndex>) -> ResponseOk
 }
 
 #[get("/docs/<path..>", rank = 10)]
-async fn doc_handler<'a>(path: PathBuf, cluster: Cluster) -> Result<ResponseOk, Status> {
+async fn doc_handler<'a>(path: PathBuf, cluster: &Cluster) -> Result<ResponseOk, Status> {
     let guides = vec![
         NavLink::new("Setup").children(vec![
             NavLink::new("Installation").children(vec![
@@ -75,11 +75,17 @@ async fn doc_handler<'a>(path: PathBuf, cluster: Cluster) -> Result<ResponseOk, 
 }
 
 #[get("/blog/<path..>", rank = 10)]
-async fn blog_handler<'a>(path: PathBuf, cluster: Cluster) -> Result<ResponseOk, Status> {
+async fn blog_handler<'a>(path: PathBuf, cluster: &Cluster) -> Result<ResponseOk, Status> {
     render(
         cluster,
         &path,
         vec![
+            NavLink::new("Announcing GPTQ & GGML Quantized LLM support for Huggingface Transformers")
+                .href("/blog/announcing-gptq-and-ggml-quantized-llm-support-for-huggingface-transformers"),
+            NavLink::new("Making Postgres 30 Percent Faster in Production")
+                .href("/blog/making-postgres-30-percent-faster-in-production"),
+            NavLink::new("MindsDB vs PostgresML")
+                .href("/blog/mindsdb-vs-postgresml"),
             NavLink::new("Introducing PostgresML Python SDK: Build End-to-End Vector Search Applications without OpenAI and Pinecone")
                 .href("/blog/introducing-postgresml-python-sdk-build-end-to-end-vector-search-applications-without-openai-and-pinecone"),
             NavLink::new("PostgresML raises $4.7M to launch serverless AI application databases based on Postgres")
@@ -121,7 +127,7 @@ async fn blog_handler<'a>(path: PathBuf, cluster: Cluster) -> Result<ResponseOk,
 }
 
 async fn render<'a>(
-    cluster: Cluster,
+    cluster: &Cluster,
     path: &'a PathBuf,
     mut nav_links: Vec<NavLink>,
     nav_title: &'a str,
@@ -130,7 +136,7 @@ async fn render<'a>(
     let url = path.clone();
 
     // Get the document content
-    let path = Path::new(&config::static_dir())
+    let path = Path::new(&config::content_dir())
         .join(folder)
         .join(&(path.to_str().unwrap().to_string() + ".md"));
 
@@ -178,6 +184,8 @@ async fn render<'a>(
     let title = markdown::get_title(&root).unwrap();
     let toc_links = markdown::get_toc(&root).unwrap();
 
+    markdown::wrap_tables(&root, &arena).unwrap();
+
     // MkDocs syntax support, e.g. tabs, notes, alerts, etc.
     markdown::mkdocs(&root, &arena).unwrap();
 
@@ -199,7 +207,7 @@ async fn render<'a>(
     let user = if cluster.context.user.is_anonymous() {
         None
     } else {
-        Some(cluster.context.user)
+        Some(cluster.context.user.clone())
     };
 
     let mut layout = crate::templates::Layout::new(&title);
@@ -254,5 +262,66 @@ SELECT * FROM test;
         let html = String::from_utf8(html).unwrap();
 
         assert!(html.contains("<span class=\"syntax-highlight\">SELECT</span>"));
+    }
+
+    #[test]
+    fn test_wrapping_tables() {
+        let markdown = r#"
+This is some markdown with a table
+
+| Syntax      | Description |
+| ----------- | ----------- |
+| Header      | Title       |
+| Paragraph   | Text        |
+
+This is the end of the markdown
+        "#;
+
+        let arena = Arena::new();
+        let root = parse_document(&arena, &markdown, &options());
+
+        let plugins = ComrakPlugins::default();
+
+        markdown::wrap_tables(&root, &arena).unwrap();
+
+        let mut html = vec![];
+        format_html_with_plugins(root, &options(), &mut html, &plugins).unwrap();
+        let html = String::from_utf8(html).unwrap();
+
+        assert!(
+            html.contains(
+                r#"
+<div class="overflow-auto w-100">
+<table>"#
+            ) && html.contains(
+                r#"
+</table>
+</div>"#
+            )
+        );
+    }
+
+    #[test]
+    fn test_wrapping_tables_no_table() {
+        let markdown = r#"
+This is some markdown with no table
+
+This is the end of the markdown
+        "#;
+
+        let arena = Arena::new();
+        let root = parse_document(&arena, &markdown, &options());
+
+        let plugins = ComrakPlugins::default();
+
+        markdown::wrap_tables(&root, &arena).unwrap();
+
+        let mut html = vec![];
+        format_html_with_plugins(root, &options(), &mut html, &plugins).unwrap();
+        let html = String::from_utf8(html).unwrap();
+
+        assert!(
+            !html.contains(r#"<div class="overflow-auto w-100">"#) || !html.contains(r#"</div>"#)
+        );
     }
 }

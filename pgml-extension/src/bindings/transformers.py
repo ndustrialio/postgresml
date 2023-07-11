@@ -1,12 +1,12 @@
-import os
-import json
 import math
+import os
 import shutil
 import time
-import numpy as np
 
 import datasets
 from InstructorEmbedding import INSTRUCTOR
+import numpy
+import orjson
 from rouge import Rouge
 from sacrebleu.metrics import BLEU
 from sentence_transformers import SentenceTransformer
@@ -42,7 +42,6 @@ __cache_transformer_by_model_id = {}
 __cache_sentence_transformer_by_name = {}
 __cache_transform_pipeline_by_task = {}
 
-
 DTYPE_MAP = {
     "uint8": torch.uint8,
     "int8": torch.int8,
@@ -58,6 +57,10 @@ DTYPE_MAP = {
     "bool": torch.bool,
 }
 
+def orjson_default(obj):
+    if isinstance(obj, numpy.float32):
+        return float(obj)
+    raise TypeError
 
 def convert_dtype(kwargs):
     if "torch_dtype" in kwargs:
@@ -79,41 +82,79 @@ def ensure_device(kwargs):
             kwargs["device"] = "cpu"
 
 
-class NumpyJSONEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.float32):
-            return float(obj)
-        return super().default(obj)
+class GPTQPipeline(object):
+    def __init__(self, model_name, **task):
+        import auto_gptq
+        from huggingface_hub import snapshot_download
+        model_path = snapshot_download(model_name)
+
+        self.model = auto_gptq.AutoGPTQForCausalLM.from_quantized(model_path, **task)
+        if "use_fast_tokenizer" in task:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=task.pop("use_fast_tokenizer"))
+        else:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        self.task = "text-generation"
+
+    def __call__(self, inputs, **kwargs):
+        outputs = []
+        for input in inputs:
+            tokens = self.tokenizer(input, return_tensors="pt").to(self.model.device).input_ids
+            token_ids = self.model.generate(input_ids=tokens, **kwargs)[0]
+            outputs.append(self.tokenizer.decode(token_ids))
+        return outputs
+
+
+class GGMLPipeline(object):
+    def __init__(self, model_name, **task):
+        import ctransformers
+
+        task.pop("model")
+        task.pop("task")
+        task.pop("device")
+        self.model = ctransformers.AutoModelForCausalLM.from_pretrained(model_name, **task)
+        self.tokenizer = None
+        self.task = "text-generation"
+
+    def __call__(self, inputs, **kwargs):
+        outputs = []
+        for input in inputs:
+            outputs.append(self.model(input, **kwargs))
+        return outputs
 
 
 def transform(task, args, inputs):
-    task = json.loads(task)
-    args = json.loads(args)
-    inputs = json.loads(inputs)
+    task = orjson.loads(task)
+    args = orjson.loads(args)
+    inputs = orjson.loads(inputs)
 
     key = ",".join([f"{key}:{val}" for (key, val) in sorted(task.items())])
     if key not in __cache_transform_pipeline_by_task:
         ensure_device(task)
         convert_dtype(task)
-        pipe = transformers.pipeline(**task)
-        if pipe.tokenizer is None:
-            pipe.tokenizer = AutoTokenizer.from_pretrained(pipe.model.name_or_path)
+        model_name = task.get("model", None)
+        model_name = model_name.lower() if model_name else None
+        if model_name and "-ggml" in model_name:
+            pipe = GGMLPipeline(model_name, **task)
+        elif model_name and "-gptq" in model_name:
+            pipe = GPTQPipeline(model_name, **task)
+        else:
+            pipe = transformers.pipeline(**task)
+            if pipe.tokenizer is None:
+                pipe.tokenizer = AutoTokenizer.from_pretrained(pipe.model.name_or_path)
         __cache_transform_pipeline_by_task[key] = pipe
 
     pipe = __cache_transform_pipeline_by_task[key]
 
     if pipe.task == "question-answering":
-        inputs = [json.loads(input) for input in inputs]
-
+        inputs = [orjson.loads(input) for input in inputs]
     convert_eos_token(pipe.tokenizer, args)
 
-    return json.dumps(pipe(inputs, **args), cls=NumpyJSONEncoder)
+    return orjson.dumps(pipe(inputs, **args), default=orjson_default).decode()
 
 
 def embed(transformer, inputs, kwargs):
-    
-    inputs = json.loads(inputs)
-    kwargs = json.loads(kwargs)
+    kwargs = orjson.loads(kwargs)
+
     ensure_device(kwargs)
     instructor = transformer.startswith("hkunlp/instructor")
     
@@ -135,9 +176,20 @@ def embed(transformer, inputs, kwargs):
 
     return model.encode(inputs, **kwargs)
 
+def clear_gpu_cache(memory_usage: None):
+    if not torch.cuda.is_available():
+        raise PgMLException(f"No GPU availables")
+
+
+    mem_used = torch.cuda.memory_usage()
+    if not memory_usage or mem_used >= int(memory_usage * 100.0):
+        torch.cuda.empty_cache()
+        return True
+    return False
+
 
 def load_dataset(name, subset, limit: None, kwargs: "{}"):
-    kwargs = json.loads(kwargs)
+    kwargs = orjson.loads(kwargs)
 
     if limit:
         dataset = datasets.load_dataset(
@@ -164,7 +216,7 @@ def load_dataset(name, subset, limit: None, kwargs: "{}"):
     else:
         raise PgMLException(f"Unhandled dataset type: {type(dataset)}")
 
-    return json.dumps({"data": data, "types": types})
+    return orjson.dumps({"data": data, "types": types}).decode()
 
 
 def tokenize_text_classification(tokenizer, max_length, x, y):
@@ -421,7 +473,7 @@ def compute_metrics_text_generation(model, tokenizer, hyperparams, y):
 
 
 def tune(task, hyperparams, path, x_train, x_test, y_train, y_test):
-    hyperparams = json.loads(hyperparams)
+    hyperparams = orjson.loads(hyperparams)
     model_name = hyperparams.pop("model_name")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -562,7 +614,7 @@ def generate(model_id, data, config):
     result = get_transformer_by_model_id(model_id)
     tokenizer = result["tokenizer"]
     model = result["model"]
-    config = json.loads(config)
+    config = orjson.loads(config)
     all_preds = []
 
     batch_size = 1  # TODO hyperparams

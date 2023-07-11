@@ -1,5 +1,7 @@
 use std::env::var;
 
+use anyhow::anyhow;
+
 pub fn dev_mode() -> bool {
     match var("DEV_MODE") {
         Ok(_) => true,
@@ -32,12 +34,12 @@ pub fn static_dir() -> String {
     }
 }
 
-// pub fn content_dir() -> String {
-//     match var("CONTENT_DIRECTORY") {
-//         Ok(dir) => dir,
-//         Err(_) => "content".to_string(),
-//     }
-// }
+pub fn content_dir() -> String {
+    match var("DASHBOARD_CONTENT_DIRECTORY") {
+        Ok(dir) => dir,
+        Err(_) => "content".to_string(),
+    }
+}
 
 pub fn search_index_dir() -> String {
     match var("SEARCH_INDEX_DIRECTORY") {
@@ -65,10 +67,7 @@ pub fn css_url() -> String {
         return "/dashboard/static/css/style.css".to_string();
     }
 
-    let filename = match var("CSS_VERSION") {
-        Ok(version) => format!("style.{version}.css"),
-        Err(_) => "style.css".to_string(),
-    };
+    let filename = format!("style.{}.css", env!("CSS_VERSION"));
 
     let path = format!("/dashboard/static/css/{filename}");
 
@@ -82,14 +81,9 @@ pub fn js_url(name: &str) -> String {
     let name = if dev_mode() {
         name.to_string()
     } else {
-        match var("JS_VERSION") {
-            Ok(version) => {
-                let name = name.split(".").collect::<Vec<&str>>();
-                let name = name[0..name.len() - 1].join(".");
-                format!("{name}.{version}.js")
-            }
-            Err(_) => name.to_string(),
-        }
+        let name = name.split(".").collect::<Vec<&str>>();
+        let name = name[0..name.len() - 1].join(".");
+        format!("{name}.{}.js", env!("JS_VERSION"))
     };
 
     let path = format!("/dashboard/static/js/{name}");
@@ -110,4 +104,14 @@ pub fn signup_url() -> String {
 
 pub fn standalone_dashboard() -> bool {
     !env!("CARGO_MANIFEST_DIR").contains("deps") && !env!("CARGO_MANIFEST_DIR").contains("cloud2")
+}
+
+pub fn github_stars() -> anyhow::Result<String> {
+    match var("GITHUB_STARS") {
+        Ok(stars) => match stars.parse::<f32>() {
+            Ok(stars) => Ok(format!("{:.1}K", (stars / 1000.0))),
+            _ => Err(anyhow!("Could not parse GITHUB_STARS: {}", stars)),
+        },
+        _ => Err(anyhow!("No GITHUB_STARS env var set")),
+    }
 }
