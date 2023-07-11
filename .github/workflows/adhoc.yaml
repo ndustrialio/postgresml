@@ -20,6 +20,11 @@ jobs:
           registry: quay.io
           username: ${{ secrets.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_PASSWORD }}
+      - name: Free disk space
+        # https://github.com/actions/virtual-environments/issues/709
+        run: |
+          sudo apt-get clean
+          df -h
       - name: Build and push
         uses: docker/build-push-action@v3
         with:
