@@ -1,9 +1,9 @@
 #!/bin/bash
-​
+
 POSTGRES_USER=${POSTGRES_USER:-"user"}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-"pass"}
 POSTGRES_DB=${POSTGRES_DB:-"db"}
-​
+
 # Exit on error, real CI
 echo "Starting Postgres..."
 service postgresql start
