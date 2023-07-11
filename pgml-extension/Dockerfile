@@ -53,9 +53,6 @@ RUN cd /tmp && \
     make && \
     make install
 
-<<<<<<< Updated upstream
-=======
 WORKDIR /app
 COPY entrypoint-ndustrial.sh /app/docker/entrypoint.sh
->>>>>>> Stashed changes
 ENTRYPOINT ["/bin/bash", "/app/docker/entrypoint.sh"]
